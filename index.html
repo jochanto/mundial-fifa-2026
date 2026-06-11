@@ -554,13 +554,17 @@ function matchStatus(m) {
 function formatDate(iso) {
   if (!iso) return '';
   const d = new Date(iso);
+  // Costa Rica = UTC-6, no DST
+  const cr = new Date(d.getTime() - 6 * 60 * 60 * 1000);
   const days = ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
-  return `${days[d.getDay()]} ${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}`;
+  return `${days[cr.getUTCDay()]} ${String(cr.getUTCDate()).padStart(2,'0')}/${String(cr.getUTCMonth()+1).padStart(2,'0')}`;
 }
 function formatTime(iso) {
   if (!iso) return '';
   const d = new Date(iso);
-  return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+  // Costa Rica = UTC-6, no DST
+  const cr = new Date(d.getTime() - 6 * 60 * 60 * 1000);
+  return `${String(cr.getUTCHours()).padStart(2,'0')}:${String(cr.getUTCMinutes()).padStart(2,'0')} CR`;
 }
 
 // ═══════════════════════════════════════════════════════
