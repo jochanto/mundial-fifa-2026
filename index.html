@@ -391,8 +391,8 @@ function getMatchGroup(m) {
   const stage = getLocale(m.StageName);
   const group = getLocale(m.GroupName);
   if (/primera fase|group stage/i.test(stage)) {
-    const letter = group.match(/[A-L]/)?.[0];
-    return letter ? letter : null;
+    const letter = group.match(/Grupo\s+([A-L])/i)?.[1] || group.match(/Group\s+([A-L])/i)?.[1];
+    return letter ? letter.toUpperCase() : null;
   }
   if (/dieciséis|sixteen|dieciseis|round of 32/i.test(stage)) return 'Dieciseisavos';
   if (/octav|round of 16/i.test(stage)) return 'Octavos';
