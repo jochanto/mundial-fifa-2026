@@ -127,11 +127,19 @@
   .bar-away-fill{height:100%;background:var(--blue);border-radius:0 3px 3px 0;transition:width .5s;}
 
   /* Cards section */
-  .cards-row{display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;}
-  .card-chip{font-size:.7rem;padding:3px 8px;border-radius:5px;font-weight:700;}
-  .card-yellow{background:#3a2d00;color:#eab308;}
-  .card-red{background:#3a0000;color:#ef4444;}
-  .card-section-title{font-size:.68rem;color:var(--muted);margin-right:6px;}
+  .cards-section{margin-top:12px;}
+  .cards-section-title{font-size:.65rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:7px;}
+  .cards-teams{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+  .cards-col h5{font-size:.68rem;color:var(--muted);font-weight:700;text-transform:uppercase;margin-bottom:5px;text-align:center;}
+  .card-item{display:flex;align-items:center;gap:6px;font-size:.75rem;padding:3px 0;}
+  .cards-col.home-side .card-item{flex-direction:row-reverse;text-align:right;}
+  .card-icon{width:10px;height:14px;border-radius:2px;flex-shrink:0;}
+  .card-icon.yellow{background:#eab308;}
+  .card-icon.red{background:#ef4444;}
+  .card-icon.yellow-red{background:linear-gradient(135deg,#eab308 50%,#ef4444 50%);}
+  .card-min{color:var(--muted);font-size:.67rem;min-width:24px;}
+  .cards-col.home-side .card-min{text-align:right;}
+  .card-name{flex:1;}
 
   /* KO bracket */
   .bracket-section{margin-bottom:26px;}
@@ -251,6 +259,11 @@ const GOAL_TYPES   = new Set([0, 1, 3, 4, 41, 42]);  // gol, autogol, penal, etc
 const OWN_GOAL     = new Set([1, 4]);
 const PENALTY_GOAL = new Set([41, 42]);
 
+// Event types for cards (FIFA API type IDs)
+const YELLOW_CARD     = new Set([6]);
+const RED_CARD        = new Set([7]);
+const YELLOW_RED_CARD = new Set([8]); // segunda amarilla → expulsión
+
 const FLAGS = {
   MEX:'🇲🇽', RSA:'🇿🇦', KOR:'🇰🇷', CZE:'🇨🇿',
   CAN:'🇨🇦', BIH:'🇧🇦', QAT:'🇶🇦', SUI:'🇨🇭',
@@ -358,7 +371,8 @@ function embedYT(videoId) {
 // STATE
 // ═══════════════════════════════════════════════════════
 let fifaMatches  = JSON.parse(localStorage.getItem('wc26_matches') || '[]');
-let fifaScorers  = JSON.parse(localStorage.getItem('wc26_scorers') || '{}'); // idMatch → events
+let fifaScorers  = JSON.parse(localStorage.getItem('wc26_scorers') || '{}'); // idMatch → goals
+let fifaCards    = JSON.parse(localStorage.getItem('wc26_cards')   || '{}'); // idMatch → cards
 let lastSync     = parseInt(localStorage.getItem('wc26_lastSync') || '0');
 let currentTab   = 'resumen';
 let openPanels   = new Set();
@@ -367,6 +381,7 @@ let refreshTimer = null;
 function saveState() {
   localStorage.setItem('wc26_matches',  JSON.stringify(fifaMatches));
   localStorage.setItem('wc26_scorers',  JSON.stringify(fifaScorers));
+  localStorage.setItem('wc26_cards',    JSON.stringify(fifaCards));
   localStorage.setItem('wc26_lastSync', String(Date.now()));
   lastSync = Date.now();
 }
@@ -418,51 +433,69 @@ async function fetchLiveScorers() {
         const r = await fetch(url, { headers: { 'Origin': 'https://www.fifa.com' } });
         if (!r.ok) return;
         const d = await r.json();
-        fifaScorers[m.IdMatch] = extractGoals(d.Event || [], m);
+        const extracted = extractEvents(d.Event || [], m);
+        fifaScorers[m.IdMatch] = extracted.goals;
+        fifaCards[m.IdMatch]   = extracted.cards;
       } catch {}
     }));
   }
   localStorage.setItem('wc26_scorers', JSON.stringify(fifaScorers));
+  localStorage.setItem('wc26_cards',   JSON.stringify(fifaCards));
 }
 
-function extractGoals(events, match) {
+function extractPlayerName(e) {
+  for (const ed of (e.EventDescription || [])) {
+    const desc = ed.Description || '';
+    let m2 = desc.match(/^¡?([A-ZÁÉÍÓÚÜÑ][A-ZÁÉÍÓÚÜÑa-záéíóúüñ\s\.\-\']+?)\s*\(/);
+    if (!m2) m2 = desc.match(/(?:gol[!:]?\s*|goal[!:]?\s*)([A-ZÁÉÍÓÚÜÑ][A-ZÁÉÍÓÚÜÑa-záéíóúüñ\s\.\-\']+)/i);
+    if (!m2) m2 = desc.match(/^([A-ZÁÉÍÓÚÜÑ][A-ZÁÉÍÓÚÜÑa-záéíóúüñ\s\.\-\']{2,30})/);
+    if (m2) return m2[1].trim();
+  }
+  return '';
+}
+
+function getEventSide(e, match) {
+  if (!e.IdTeam) return 'home';
+  return e.IdTeam === match.Home?.IdTeam ? 'home' : 'away';
+}
+
+function extractEvents(events, match) {
   const goals = [];
+  const cards = [];
   let prevH = 0, prevA = 0;
+
   for (const e of events) {
+    const typeId = e.Type;
+    const min    = e.MatchMinute || '?';
+    const name   = extractPlayerName(e);
+    const side   = getEventSide(e, match);
+
+    // Goals
     const h = e.HomeGoals || 0, a = e.AwayGoals || 0;
     if (h > prevH || a > prevA) {
       const isHome = (h > prevH);
-      const typeId = e.Type;
-      const own = OWN_GOAL.has(typeId);
-      const pen = PENALTY_GOAL.has(typeId);
-      // Extract player name from EventDescription
-      let name = '';
-      for (const ed of (e.EventDescription || [])) {
-        const desc = ed.Description || '';
-        // Try "NAME (team)" format (all caps)
-        let m2 = desc.match(/^¡?([A-ZÁÉÍÓÚÜÑ][A-ZÁÉÍÓÚÜÑa-záéíóúüñ\s\.\-\']+?)\s*\(/);
-        if (!m2) {
-          // Try "Goal! Name" or plain name at start
-          m2 = desc.match(/(?:gol[!:]?\s*|goal[!:]?\s*)([A-ZÁÉÍÓÚÜÑ][A-ZÁÉÍÓÚÜÑa-záéíóúüñ\s\.\-\']+)/i);
-        }
-        if (!m2) {
-          // Last resort: first capitalized word sequence
-          m2 = desc.match(/^([A-ZÁÉÍÓÚÜÑ][A-ZÁÉÍÓÚÜÑa-záéíóúüñ\s\.\-\']{2,30})/);
-        }
-        if (m2) { name = m2[1].trim(); break; }
-      }
       goals.push({
-        min: e.MatchMinute || '?',
-        name,
+        min, name,
         side: isHome ? 'home' : 'away',
-        own, pen,
+        own:  OWN_GOAL.has(typeId),
+        pen:  PENALTY_GOAL.has(typeId),
         scoreH: h, scoreA: a,
         idTeam: e.IdTeam,
       });
       prevH = h; prevA = a;
     }
+
+    // Cards
+    if (YELLOW_CARD.has(typeId)) {
+      cards.push({ min, name, side, type: 'yellow' });
+    } else if (RED_CARD.has(typeId)) {
+      cards.push({ min, name, side, type: 'red' });
+    } else if (YELLOW_RED_CARD.has(typeId)) {
+      cards.push({ min, name, side, type: 'yellow-red' });
+    }
   }
-  return goals;
+
+  return { goals, cards };
 }
 
 function scheduleNextRefresh() {
@@ -731,6 +764,35 @@ function renderMatchCard(m) {
     </div>`;
   };
 
+  // Cards
+  const matchCards   = fifaCards[m.IdMatch] || [];
+  const homeCards    = matchCards.filter(c => c.side === 'home');
+  const awayCards    = matchCards.filter(c => c.side === 'away');
+
+  const cardItem = (c) => {
+    const label = c.type === 'yellow' ? 'Amarilla' : c.type === 'red' ? 'Roja' : '2ª Amarilla';
+    return `<div class="card-item">
+      <span class="card-icon ${c.type}"></span>
+      <span class="card-min">${c.min}'</span>
+      <span class="card-name">${c.name || '<em style="color:var(--muted)">Desconocido</em>'}</span>
+    </div>`;
+  };
+
+  const cardsHtml = (homeCards.length || awayCards.length) ? `
+    <div class="cards-section">
+      <div class="cards-section-title">🟨 Tarjetas</div>
+      <div class="cards-teams">
+        <div class="cards-col home-side">
+          <h5>${f(hIso)}${hName}</h5>
+          ${homeCards.length ? homeCards.map(cardItem).join('') : '<div class="no-goals">Sin tarjetas</div>'}
+        </div>
+        <div class="cards-col">
+          <h5>${f(aIso)}${aName}</h5>
+          ${awayCards.length ? awayCards.map(cardItem).join('') : '<div class="no-goals">Sin tarjetas</div>'}
+        </div>
+      </div>
+    </div>` : '';
+
   // Resumen narrativo y highlights solo para partidos finalizados
   const summaryHtml = (status === 'fin') ? `
     <div class="match-summary">
@@ -754,6 +816,9 @@ function renderMatchCard(m) {
           ${awayGoals.length ? awayGoals.map(g=>goalItem(g,'away')).join('') : '<div class="no-goals">Sin goles</div>'}
         </div>
       </div>` : '<div style="font-size:.72rem;color:var(--muted);text-align:center;margin-bottom:12px">Sin datos de goleadores aún</div>'}
+
+      <!-- Cards -->
+      ${cardsHtml}
 
       <!-- Possession bar -->
       ${hPoss !== null ? `
@@ -1074,9 +1139,10 @@ function renderCurrentTab() {
 
 function clearCache() {
   if (!confirm('¿Borrar la caché de datos? Se volverán a descargar de FIFA.')) return;
-  fifaMatches=[]; fifaScorers={}; lastSync=0;
+  fifaMatches=[]; fifaScorers={}; fifaCards={}; lastSync=0;
   localStorage.removeItem('wc26_matches');
   localStorage.removeItem('wc26_scorers');
+  localStorage.removeItem('wc26_cards');
   localStorage.removeItem('wc26_lastSync');
   document.getElementById('mainContent').innerHTML=`<div class="loading-overlay"><div class="spinner"></div><p style="color:var(--muted)">Recargando…</p></div>`;
   fetchFromFIFA(true);
