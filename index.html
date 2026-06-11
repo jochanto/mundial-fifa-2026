@@ -82,6 +82,11 @@
   .stats-panel.open{display:block;}
   .stats-inner{padding:12px 14px;}
 
+  /* Match summary */
+  .match-summary{background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:11px 14px;margin-bottom:14px;}
+  .match-summary-title{font-size:.65rem;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.5px;margin-bottom:7px;display:flex;align-items:center;gap:5px;}
+  .match-summary-text{font-size:.78rem;color:var(--text);line-height:1.6;}
+
   /* Goals list */
   .goals-row{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;}
   .goals-col h5{font-size:.68rem;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.4px;margin-bottom:5px;text-align:center;}
@@ -472,6 +477,83 @@ function buildScorers() {
 }
 
 // ═══════════════════════════════════════════════════════
+// MATCH SUMMARY GENERATOR
+// ═══════════════════════════════════════════════════════
+function generateMatchSummary(m, goals) {
+  const hN  = teamName(m.Home);
+  const aN  = teamName(m.Away);
+  const hS  = m.HomeTeamScore;
+  const aS  = m.AwayTeamScore;
+  const hIso = m.Home?.IdCountry || '';
+  const aIso = m.Away?.IdCountry || '';
+  const homeGoals = goals.filter(g => g.side === 'home');
+  const awayGoals = goals.filter(g => g.side === 'away');
+  const poss = m.BallPossession;
+  const hPoss = poss?.OverallHome ? Math.round(poss.OverallHome) : null;
+  const aPoss = poss?.OverallAway ? Math.round(poss.OverallAway) : null;
+  const attendance = m.Attendance ? parseInt(m.Attendance) : null;
+  const city = getLocale(m.Stadium?.CityName) || '';
+
+  const parts = [];
+
+  // Resultado y contexto
+  if (hS === aS) {
+    parts.push(`${f(hIso)}${hN} y ${f(aIso)}${aN} igualaron ${hS}–${aS} en un partido que terminó sin ganador.`);
+  } else {
+    const winner = hS > aS ? `${f(hIso)}${hN}` : `${f(aIso)}${aN}`;
+    const loser  = hS > aS ? `${f(aIso)}${aN}` : `${f(hIso)}${hN}`;
+    const wScore = hS > aS ? hS : aS;
+    const lScore = hS > aS ? aS : hS;
+    const margin = Math.abs(hS - aS);
+    const adjective = margin >= 3 ? 'contundente' : margin === 2 ? 'clara' : 'ajustada';
+    parts.push(`${winner} se impuso a ${loser} por ${wScore}–${lScore} en victoria ${adjective}.`);
+  }
+
+  // Sede
+  if (city) parts[0] += ` El partido se disputó en ${city}.`;
+
+  // Goles destacados
+  const allGoals = [...homeGoals, ...awayGoals].sort((a,b)=>parseInt(a.min)-parseInt(b.min));
+  if (allGoals.length) {
+    const scored = allGoals.filter(g => g.name);
+    if (scored.length) {
+      const names = scored.map(g => {
+        const team = g.side === 'home' ? `${f(hIso)}${hN}` : `${f(aIso)}${aN}`;
+        const tipo = g.pen ? ' (penal)' : g.own ? ' (en propia puerta)' : '';
+        return `${g.name}${tipo} (${g.min}')`;
+      });
+      if (names.length === 1) {
+        parts.push(`El único gol fue de ${names[0]}.`);
+      } else if (names.length <= 4) {
+        parts.push(`Los goles fueron de ${names.slice(0,-1).join(', ')} y ${names[names.length-1]}.`);
+      } else {
+        parts.push(`Goles de ${names.slice(0,3).join(', ')} y ${names.length-3} más.`);
+      }
+    }
+  } else if (hS === 0 && aS === 0) {
+    parts.push('Ambos equipos no lograron marcar a lo largo de los 90 minutos.');
+  }
+
+  // Posesión
+  if (hPoss !== null && aPoss !== null) {
+    const dominant = hPoss > aPoss ? `${f(hIso)}${hN}` : `${f(aIso)}${aN}`;
+    const domPct   = hPoss > aPoss ? hPoss : aPoss;
+    if (Math.abs(hPoss - aPoss) >= 10) {
+      parts.push(`${dominant} dominó la posesión con el ${domPct}% del balón.`);
+    } else {
+      parts.push(`La posesión fue equilibrada (${hPoss}%–${aPoss}%).`);
+    }
+  }
+
+  // Asistencia
+  if (attendance) {
+    parts.push(`Asistencia: ${attendance.toLocaleString('es')} espectadores.`);
+  }
+
+  return parts.join(' ');
+}
+
+// ═══════════════════════════════════════════════════════
 // TEAM NAME helper
 // ═══════════════════════════════════════════════════════
 function teamName(teamObj) {
@@ -544,8 +626,16 @@ function renderMatchCard(m) {
     </div>`;
   };
 
+  // Resumen narrativo solo para partidos finalizados
+  const summaryHtml = (status === 'fin') ? `
+    <div class="match-summary">
+      <div class="match-summary-title">📋 Resumen del partido</div>
+      <div class="match-summary-text">${generateMatchSummary(m, goals)}</div>
+    </div>` : '';
+
   const statsSection = (status !== 'prox') ? `
     <div class="stats-inner">
+      ${summaryHtml}
       <!-- Goals -->
       ${(homeGoals.length || awayGoals.length) ? `
       <div class="goals-row">
