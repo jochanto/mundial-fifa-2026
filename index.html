@@ -87,6 +87,22 @@
   .match-summary-title{font-size:.65rem;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.5px;margin-bottom:7px;display:flex;align-items:center;gap:5px;}
   .match-summary-text{font-size:.78rem;color:var(--text);line-height:1.6;}
 
+  /* YouTube highlights */
+  .yt-section{margin-bottom:14px;}
+  .yt-section-title{font-size:.65rem;font-weight:700;color:#ff4444;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;display:flex;align-items:center;gap:5px;}
+  .yt-videos{display:flex;flex-direction:column;gap:8px;}
+  .yt-video-card{background:var(--card2);border:1px solid var(--border);border-radius:8px;overflow:hidden;}
+  .yt-thumb-row{display:flex;gap:10px;padding:9px;cursor:pointer;align-items:flex-start;}
+  .yt-thumb{width:120px;min-width:120px;aspect-ratio:16/9;border-radius:5px;object-fit:cover;background:var(--border);}
+  .yt-info{flex:1;min-width:0;}
+  .yt-title{font-size:.76rem;font-weight:600;color:var(--text);line-height:1.4;margin-bottom:4px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+  .yt-meta{font-size:.65rem;color:var(--muted);}
+  .yt-play-btn{background:#ff4444;border:none;color:#fff;padding:4px 10px;border-radius:4px;font-size:.68rem;font-weight:700;cursor:pointer;margin-top:6px;display:inline-block;}
+  .yt-embed-wrap{position:relative;padding-bottom:56.25%;height:0;overflow:hidden;}
+  .yt-embed-wrap iframe{position:absolute;top:0;left:0;width:100%;height:100%;border:none;}
+  .yt-loading{font-size:.72rem;color:var(--muted);padding:10px;text-align:center;}
+  .yt-error{font-size:.72rem;color:#ef4444;padding:8px 10px;background:rgba(239,68,68,.08);border-radius:6px;}
+
   /* Goals list */
   .goals-row{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;}
   .goals-col h5{font-size:.68rem;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.4px;margin-bottom:5px;text-align:center;}
@@ -259,6 +275,84 @@ const GROUPS = {
   I:['FRA','SEN','IRQ','NOR'], J:['ARG','ALG','AUT','JOR'],
   K:['POR','COD','UZB','COL'], L:['ENG','CRO','GHA','PAN'],
 };
+
+// ═══════════════════════════════════════════════════════
+// YOUTUBE CONFIG
+// ═══════════════════════════════════════════════════════
+const YT_API_KEY    = 'AIzaSyB8gJCE77IRUuzQWt1O9F8X1wsftmS-cT0';
+const FIFA_YT_CHANNEL = 'UCpcTrCXblq78GZrTUTLWeBw';
+const YT_CACHE_KEY  = 'wc26_yt';
+
+let ytCache = JSON.parse(localStorage.getItem(YT_CACHE_KEY) || '{}');
+
+async function fetchYTHighlights(matchId, homeTeam, awayTeam) {
+  if (ytCache[matchId]) return ytCache[matchId];
+
+  const query = encodeURIComponent(`${homeTeam} ${awayTeam} highlights FIFA World Cup 2026`);
+  const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&channelId=${FIFA_YT_CHANNEL}&q=${query}&maxResults=3&order=relevance&type=video&key=${YT_API_KEY}`;
+
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`YT API ${res.status}`);
+    const data = await res.json();
+    const videos = (data.items || []).map(item => ({
+      id:       item.id.videoId,
+      title:    item.snippet.title,
+      thumb:    item.snippet.thumbnails?.medium?.url || item.snippet.thumbnails?.default?.url,
+      published: item.snippet.publishedAt,
+    }));
+    ytCache[matchId] = videos;
+    localStorage.setItem(YT_CACHE_KEY, JSON.stringify(ytCache));
+    return videos;
+  } catch (e) {
+    return { error: e.message };
+  }
+}
+
+function renderYTSection(matchId) {
+  return `<div class="yt-section" id="yt-${matchId}">
+    <div class="yt-section-title">▶ Highlights en YouTube</div>
+    <div id="yt-body-${matchId}" class="yt-loading">Cargando videos…</div>
+  </div>`;
+}
+
+async function loadYTForMatch(matchId, homeTeam, awayTeam) {
+  const container = document.getElementById(`yt-body-${matchId}`);
+  if (!container) return;
+
+  const videos = await fetchYTHighlights(matchId, homeTeam, awayTeam);
+
+  if (videos.error) {
+    container.innerHTML = `<div class="yt-error">⚠️ No se pudieron cargar los videos: ${videos.error}</div>`;
+    return;
+  }
+  if (!videos.length) {
+    container.innerHTML = `<div class="yt-error">Sin videos encontrados para este partido aún.</div>`;
+    return;
+  }
+
+  container.innerHTML = `<div class="yt-videos">${videos.map(v => `
+    <div class="yt-video-card" id="ytcard-${v.id}">
+      <div class="yt-thumb-row" onclick="embedYT('${v.id}')">
+        <img class="yt-thumb" src="${v.thumb}" alt="" loading="lazy">
+        <div class="yt-info">
+          <div class="yt-title">${v.title}</div>
+          <div class="yt-meta">${new Date(v.published).toLocaleDateString('es',{day:'2-digit',month:'short',year:'numeric'})}</div>
+          <button class="yt-play-btn">▶ Reproducir</button>
+        </div>
+      </div>
+    </div>`).join('')}
+  </div>`;
+}
+
+function embedYT(videoId) {
+  const card = document.getElementById(`ytcard-${videoId}`);
+  if (!card) return;
+  card.innerHTML = `<div class="yt-embed-wrap">
+    <iframe src="https://www.youtube.com/embed/${videoId}?autoplay=1&rel=0"
+      allow="autoplay; encrypted-media" allowfullscreen></iframe>
+  </div>`;
+}
 
 // ═══════════════════════════════════════════════════════
 // STATE
@@ -626,12 +720,13 @@ function renderMatchCard(m) {
     </div>`;
   };
 
-  // Resumen narrativo solo para partidos finalizados
+  // Resumen narrativo y highlights solo para partidos finalizados
   const summaryHtml = (status === 'fin') ? `
     <div class="match-summary">
       <div class="match-summary-title">📋 Resumen del partido</div>
       <div class="match-summary-text">${generateMatchSummary(m, goals)}</div>
-    </div>` : '';
+    </div>
+    ${renderYTSection(m.IdMatch)}` : '';
 
   const statsSection = (status !== 'prox') ? `
     <div class="stats-inner">
@@ -685,6 +780,12 @@ function togglePanel(id) {
   const b = document.getElementById('eb-'+id);
   if (p) p.classList.toggle('open', openPanels.has(id));
   if (b) b.textContent = openPanels.has(id) ? '▼' : '▶';
+
+  // Lazy-load YouTube highlights when opening a finished match panel
+  if (openPanels.has(id) && document.getElementById(`yt-body-${id}`)) {
+    const match = fifaMatches.find(m => m.IdMatch === id);
+    if (match) loadYTForMatch(id, teamName(match.Home), teamName(match.Away));
+  }
 }
 
 // ═══════════════════════════════════════════════════════
