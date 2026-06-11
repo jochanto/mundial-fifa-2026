@@ -438,7 +438,17 @@ function extractGoals(events, match) {
       // Extract player name from EventDescription
       let name = '';
       for (const ed of (e.EventDescription || [])) {
-        const m2 = ed.Description?.match(/^¡?([A-ZÁÉÍÓÚÜÑ\s\.]+)\s*\(/);
+        const desc = ed.Description || '';
+        // Try "NAME (team)" format (all caps)
+        let m2 = desc.match(/^¡?([A-ZÁÉÍÓÚÜÑ][A-ZÁÉÍÓÚÜÑa-záéíóúüñ\s\.\-\']+?)\s*\(/);
+        if (!m2) {
+          // Try "Goal! Name" or plain name at start
+          m2 = desc.match(/(?:gol[!:]?\s*|goal[!:]?\s*)([A-ZÁÉÍÓÚÜÑ][A-ZÁÉÍÓÚÜÑa-záéíóúüñ\s\.\-\']+)/i);
+        }
+        if (!m2) {
+          // Last resort: first capitalized word sequence
+          m2 = desc.match(/^([A-ZÁÉÍÓÚÜÑ][A-ZÁÉÍÓÚÜÑa-záéíóúüñ\s\.\-\']{2,30})/);
+        }
         if (m2) { name = m2[1].trim(); break; }
       }
       goals.push({
@@ -691,9 +701,10 @@ function renderMatchCard(m) {
 
   // Goal scorers display (home side reversed)
   const goalItem = (g, side) => {
-    const type = g.pen ? ' (P)' : g.own ? ' (PP)' : '';
-    return `<div class="goal-item"><span class="goal-min">${g.min}</span>
-      <span class="goal-name">${g.name||'–'}${type}</span></div>`;
+    const type = g.pen ? ' <span class="goal-type">(penal)</span>' : g.own ? ' <span class="goal-type">(p.p.)</span>' : '';
+    const displayName = g.name || '<span style="color:var(--muted);font-style:italic">Desconocido</span>';
+    return `<div class="goal-item"><span class="goal-min">${g.min}'</span>
+      <span class="goal-name">${displayName}${type}</span></div>`;
   };
 
   const hasStats = poss || m.Attendance;
