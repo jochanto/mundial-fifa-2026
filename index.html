@@ -529,11 +529,25 @@ function extractESPNEvents(summary, match) {
       if (!score.scoringPlay) continue;
       const teamId = score.team?.id?.toString();
       const side   = teamId === match.Home?.IdTeam ? 'home' : 'away';
-      const min    = score.clock?.displayValue?.replace(/[^0-9+]/g,'') || '?';
-      const athlete = score.athletes?.find(a => a.type === 'scorer' || a.type === 'athlete');
-      const name   = athlete?.athlete?.displayName || '';
-      const isOwn  = /own.goal/i.test(score.scoreType?.displayName || '');
-      const isPen  = /penalty/i.test(score.scoreType?.displayName || '');
+      const min    = score.clock?.displayValue?.replace(/[^0-9+]/g,'') ||
+                     (score.clock?.value ? String(Math.ceil(score.clock.value / 60)) : '?');
+
+      // Try every known ESPN field for player name
+      const name =
+        score.athlete?.displayName ||
+        score.athletes?.find(a => a.type === 'scorer')?.athlete?.displayName ||
+        score.athletes?.find(a => a.type === 'athlete')?.athlete?.displayName ||
+        score.athletes?.[0]?.athlete?.displayName ||
+        score.players?.find(p => p.type === 'scorer')?.displayName ||
+        score.players?.[0]?.displayName ||
+        // last resort: extract first capitalized name from text
+        score.text?.match(/^([A-ZÁÉÍÓÚÜÑA-Za-z][a-záéíóúüñA-Z][\w\s\.\-\']{2,28}?)(?:\s*\(|\s*-|\s*scores|\s*gol)/i)?.[1]?.trim() ||
+        score.shortText?.match(/^(.+?)\s+(?:scores|gol|\d+\')/i)?.[1]?.trim() ||
+        '';
+
+      const scoreType = (score.scoreType?.displayName || score.scoringType?.displayName || '').toLowerCase();
+      const isOwn  = /own.goal|en.propia/i.test(scoreType);
+      const isPen  = /penalty|penal/i.test(scoreType);
       goals.push({
         min, name,
         side: isOwn ? (side === 'home' ? 'away' : 'home') : side,
