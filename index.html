@@ -353,26 +353,29 @@ async function loadYTForMatch(matchId, homeTeam, awayTeam) {
   }
 
   container.innerHTML = `<div class="yt-videos">${videos.map(v => `
-    <div class="yt-video-card" id="ytcard-${v.id}">
-      <div class="yt-thumb-row" onclick="embedYT('${v.id}')">
-        <img class="yt-thumb" src="${v.thumb}" alt="" loading="lazy">
+    <a class="yt-video-card" href="https://www.youtube.com/watch?v=${v.id}" target="_blank" rel="noopener" style="text-decoration:none;display:block;">
+      <div class="yt-thumb-row">
+        <div style="position:relative;min-width:120px;width:120px;">
+          <img class="yt-thumb" src="${v.thumb}" alt="" loading="lazy">
+          <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;">
+            <div style="width:32px;height:32px;background:rgba(255,0,0,.85);border-radius:50%;display:flex;align-items:center;justify-content:center;">
+              <span style="color:#fff;font-size:.9rem;margin-left:3px">▶</span>
+            </div>
+          </div>
+        </div>
         <div class="yt-info">
           <div class="yt-title">${v.title}</div>
           <div class="yt-meta">${new Date(v.published).toLocaleDateString('es',{day:'2-digit',month:'short',year:'numeric'})}</div>
-          <button class="yt-play-btn">▶ Reproducir</button>
+          <div class="yt-play-btn" style="margin-top:6px">▶ Ver en YouTube</div>
         </div>
       </div>
-    </div>`).join('')}
+    </a>`).join('')}
   </div>`;
 }
 
 function embedYT(videoId) {
-  const card = document.getElementById(`ytcard-${videoId}`);
-  if (!card) return;
-  card.innerHTML = `<div class="yt-embed-wrap">
-    <iframe src="https://www.youtube.com/embed/${videoId}?autoplay=1&rel=0"
-      allow="autoplay; encrypted-media" allowfullscreen></iframe>
-  </div>`;
+  // No longer used — videos open directly on YouTube to avoid FIFA embed block
+  window.open(`https://www.youtube.com/watch?v=${videoId}`, '_blank', 'noopener');
 }
 
 // ═══════════════════════════════════════════════════════
@@ -447,11 +450,21 @@ async function fetchFromESPN(manual = false) {
   if (btn) { btn.disabled = true; btn.textContent = '⏳ Actualizando…'; }
 
   try {
-    // Fetch all tournament matches (Jun 11 – Jul 19 2026)
-    const url = `${ESPN_API}/scoreboard?dates=20260611-20260719&limit=300`;
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`ESPN HTTP ${res.status}`);
-    const data = await res.json();
+    // Try date range first, then single-date fallback for today
+    const urls = [
+      `${ESPN_API}/scoreboard?dates=20260611-20260719&limit=300`,
+      `${ESPN_API}/scoreboard?limit=300`,
+    ];
+    let data = null;
+    for (const url of urls) {
+      try {
+        const res = await fetch(url);
+        if (!res.ok) continue;
+        data = await res.json();
+        if ((data.events || []).length > 0) break;
+      } catch {}
+    }
+    if (!data) throw new Error('No se pudo conectar con ESPN');
 
     fifaMatches = (data.events || []).map((e, i) => normalizeESPNMatch(e, i));
     saveState();
