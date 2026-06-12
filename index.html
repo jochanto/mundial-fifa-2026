@@ -213,7 +213,7 @@
       <span id="syncDot" style="display:none" class="live-dot"></span>
       <span id="syncText">–</span>
     </div>
-    <button class="sync-btn" id="syncBtn" onclick="fetchFromFIFA(true)">
+    <button class="sync-btn" id="syncBtn" onclick="fetchFromESPN(true)">
       🔄 Actualizar
     </button>
   </div>
@@ -238,31 +238,39 @@
 </nav>
 
 <main id="mainContent">
-  <div class="loading-overlay"><div class="spinner"></div><p style="color:var(--muted)">Cargando datos de FIFA…</p></div>
+  <div class="loading-overlay"><div class="spinner"></div><p style="color:var(--muted)">Cargando datos del Mundial…</p></div>
 </main>
 
 <script>
 // ═══════════════════════════════════════════════════════
-// FIFA API CONFIG
+// ESPN API CONFIG (CORS-friendly, no key needed)
 // ═══════════════════════════════════════════════════════
-const FIFA_API   = 'https://api.fifa.com/api/v3';
-const ID_COMP    = '17';
-const ID_SEASON  = '285023';  // Copa Mundial FIFA 2026
-const REFRESH_MS = 60_000;    // auto-refresh cada 60 s
+const ESPN_API   = 'https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world';
+const REFRESH_MS = 60_000;
 
-// MatchStatus values: 0=Finalizado, 1=Próximo, 3=En juego, 12=En juego (ET), ...
-const STATUS_LIVE     = new Set([3, 4, 5, 6, 7, 12, 13]);
+// MatchStatus: 0=Finalizado, 1=Próximo, 3=En juego
+const STATUS_LIVE     = new Set([3, 4, 5]);
 const STATUS_FINISHED = new Set([0]);
 
-// Event types for goals
-const GOAL_TYPES   = new Set([0, 1, 3, 4, 41, 42]);  // gol, autogol, penal, etc.
-const OWN_GOAL     = new Set([1, 4]);
-const PENALTY_GOAL = new Set([41, 42]);
+// ESPN play type IDs
+const ESPN_GOAL      = new Set(['97', '99']); // gol normal, penal
+const ESPN_OWN_GOAL  = new Set(['98']);
+const ESPN_YELLOW    = new Set(['93']);
+const ESPN_RED       = new Set(['95']);
+const ESPN_YELLOW_RED = new Set(['94']); // 2ª amarilla
 
-// Event types for cards (FIFA API type IDs)
-const YELLOW_CARD     = new Set([6]);
-const RED_CARD        = new Set([7]);
-const YELLOW_RED_CARD = new Set([8]); // segunda amarilla → expulsión
+// ESPN abbr → nuestros ISO codes
+const ESPN_ISO = {
+  'CURA':'CUW','PRY':'PAR','AUS':'AUS','TUR':'TUR','CIV':'CIV',
+  'MAR':'MAR','HAI':'HAI','SCO':'SCO','CPV':'CPV','KSA':'KSA',
+  'ALG':'ALG','JOR':'JOR','COD':'COD','UZB':'UZB','IRQ':'IRQ',
+  'NOR':'NOR','BIH':'BIH','QAT':'QAT','SUI':'SUI',
+};
+function toISO(abbr) {
+  if (!abbr) return '';
+  const u = abbr.toUpperCase();
+  return ESPN_ISO[u] || u;
+}
 
 const FLAGS = {
   MEX:'🇲🇽', RSA:'🇿🇦', KOR:'🇰🇷', CZE:'🇨🇿',
@@ -387,30 +395,75 @@ function saveState() {
 }
 
 // ═══════════════════════════════════════════════════════
-// FIFA FETCH
+// ESPN FETCH
 // ═══════════════════════════════════════════════════════
-async function fetchFromFIFA(manual = false) {
+function normalizeESPNMatch(event, idx) {
+  const comp = event.competitions?.[0] || {};
+  const home = comp.competitors?.find(c => c.homeAway === 'home') || {};
+  const away = comp.competitors?.find(c => c.homeAway === 'away') || {};
+  const state = comp.status?.type?.state || 'pre';
+  const matchStatus = state === 'post' ? 0 : state === 'in' ? 3 : 1;
+  const scored = state !== 'pre';
+
+  // Group/stage from ESPN notes or season type
+  const note      = comp.notes?.[0]?.headline || '';
+  const groupName = note;
+  const stageName = comp.season?.type?.abbreviation === 'post'
+    ? (comp.status?.period > 4 ? 'Final' : 'Eliminatoria')
+    : 'Primera Fase';
+
+  return {
+    IdMatch:       event.id,
+    MatchStatus:   matchStatus,
+    MatchNumber:   idx + 1,
+    HomeTeamScore: scored ? parseInt(home.score ?? '0') : null,
+    AwayTeamScore: scored ? parseInt(away.score ?? '0') : null,
+    Home: {
+      IdTeam:    home.id || '',
+      IdCountry: toISO(home.team?.abbreviation),
+      TeamName:  [{ Locale: 'es', Description: home.team?.displayName || '' }],
+      Abbreviation: home.team?.abbreviation || '',
+    },
+    Away: {
+      IdTeam:    away.id || '',
+      IdCountry: toISO(away.team?.abbreviation),
+      TeamName:  [{ Locale: 'es', Description: away.team?.displayName || '' }],
+      Abbreviation: away.team?.abbreviation || '',
+    },
+    Date:      event.date,
+    LocalDate: event.date,
+    MatchTime: state === 'in' ? (comp.status?.displayClock || '') : '',
+    BallPossession: null,
+    Attendance: comp.attendance || null,
+    Stadium: { CityName: [{ Locale: 'es', Description: comp.venue?.address?.city || '' }] },
+    StageName: [{ Locale: 'es', Description: stageName }],
+    GroupName:  [{ Locale: 'es', Description: groupName }],
+    IdStage:   comp.id || '',
+  };
+}
+
+async function fetchFromESPN(manual = false) {
   const btn = document.getElementById('syncBtn');
-  const st  = document.getElementById('syncText');
   if (btn) { btn.disabled = true; btn.textContent = '⏳ Actualizando…'; }
 
   try {
-    const url = `${FIFA_API}/calendar/matches?idCompetition=${ID_COMP}&idSeason=${ID_SEASON}&count=104&language=es`;
-    const res = await fetch(url, { headers: { 'Origin': 'https://www.fifa.com' } });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    // Fetch all tournament matches (Jun 11 – Jul 19 2026)
+    const url = `${ESPN_API}/scoreboard?dates=20260611-20260719&limit=300`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`ESPN HTTP ${res.status}`);
     const data = await res.json();
-    fifaMatches = data.Results || [];
+
+    fifaMatches = (data.events || []).map((e, i) => normalizeESPNMatch(e, i));
     saveState();
     setSyncStatus('ok');
-    if (manual) toast('✅ Datos actualizados desde FIFA');
+    if (manual) toast('✅ Datos actualizados');
 
-    // Fetch scorers for live and recently finished matches
-    await fetchLiveScorers();
+    await fetchESPNDetails();
     renderCurrentTab();
     scheduleNextRefresh();
   } catch (e) {
     setSyncStatus('error');
-    if (manual) toast('⚠️ Error al conectar con FIFA. Usando datos en caché.');
+    if (manual) toast('⚠️ Error al cargar datos. Usando caché.');
     if (fifaMatches.length) renderCurrentTab();
     else renderError(e.message);
   } finally {
@@ -418,24 +471,23 @@ async function fetchFromFIFA(manual = false) {
   }
 }
 
-async function fetchLiveScorers() {
+async function fetchESPNDetails() {
   const toFetch = fifaMatches.filter(m =>
     STATUS_LIVE.has(m.MatchStatus) || STATUS_FINISHED.has(m.MatchStatus)
   );
-  // Parallel fetch but limit to avoid hammering
   const chunks = [];
   for (let i = 0; i < toFetch.length; i += 6) chunks.push(toFetch.slice(i, i+6));
   for (const chunk of chunks) {
     await Promise.allSettled(chunk.map(async m => {
-      if (fifaScorers[m.IdMatch] && !STATUS_LIVE.has(m.MatchStatus)) return; // cached
+      if (fifaScorers[m.IdMatch] && !STATUS_LIVE.has(m.MatchStatus)) return;
       try {
-        const url = `${FIFA_API}/timelines/${ID_COMP}/${ID_SEASON}/${m.IdStage}/${m.IdMatch}?language=es`;
-        const r = await fetch(url, { headers: { 'Origin': 'https://www.fifa.com' } });
+        const r = await fetch(`${ESPN_API}/summary?event=${m.IdMatch}`);
         if (!r.ok) return;
         const d = await r.json();
-        const extracted = extractEvents(d.Event || [], m);
+        const extracted = extractESPNEvents(d, m);
         fifaScorers[m.IdMatch] = extracted.goals;
         fifaCards[m.IdMatch]   = extracted.cards;
+        extractESPNPossession(d, m);
       } catch {}
     }));
   }
@@ -443,66 +495,80 @@ async function fetchLiveScorers() {
   localStorage.setItem('wc26_cards',   JSON.stringify(fifaCards));
 }
 
-function extractPlayerName(e) {
-  for (const ed of (e.EventDescription || [])) {
-    const desc = ed.Description || '';
-    let m2 = desc.match(/^¡?([A-ZÁÉÍÓÚÜÑ][A-ZÁÉÍÓÚÜÑa-záéíóúüñ\s\.\-\']+?)\s*\(/);
-    if (!m2) m2 = desc.match(/(?:gol[!:]?\s*|goal[!:]?\s*)([A-ZÁÉÍÓÚÜÑ][A-ZÁÉÍÓÚÜÑa-záéíóúüñ\s\.\-\']+)/i);
-    if (!m2) m2 = desc.match(/^([A-ZÁÉÍÓÚÜÑ][A-ZÁÉÍÓÚÜÑa-záéíóúüñ\s\.\-\']{2,30})/);
-    if (m2) return m2[1].trim();
-  }
-  return '';
+function espnPlayName(play) {
+  // Try participants first (scorer role)
+  const scorer = play.participants?.find(p =>
+    p.type === 'scorer' || p.type === 'athlete' || p.role?.text === 'Scorer'
+  );
+  if (scorer?.athlete?.displayName) return scorer.athlete.displayName;
+  if (play.athlete?.displayName) return play.athlete.displayName;
+  // Fallback: parse from text "Name scored" or "Name - yellow card"
+  const m = play.text?.match(/^([A-ZÁÉÍÓÚÜÑA-Za-z][^\s(,\-]{1,}\s[^\s(,\-]{1,})/);
+  return m ? m[1].trim() : '';
 }
 
-function getEventSide(e, match) {
-  if (!e.IdTeam) return 'home';
-  return e.IdTeam === match.Home?.IdTeam ? 'home' : 'away';
+function espnPlaySide(play, match) {
+  const tid = play.team?.id?.toString();
+  if (!tid) return 'home';
+  return tid === match.Home?.IdTeam ? 'home' : 'away';
 }
 
-function extractEvents(events, match) {
+function espnPlayMin(play) {
+  if (play.clock?.displayValue) return play.clock.displayValue.replace(/[^0-9+]/g,'') || '?';
+  if (play.clock?.value) return String(Math.ceil(play.clock.value / 60));
+  return '?';
+}
+
+function extractESPNEvents(summary, match) {
   const goals = [];
   const cards = [];
-  let prevH = 0, prevA = 0;
+  // ESPN provides plays or keyPlays
+  const plays = summary.plays || summary.keyPlays || [];
 
-  for (const e of events) {
-    const typeId = e.Type;
-    const min    = e.MatchMinute || '?';
-    const name   = extractPlayerName(e);
-    const side   = getEventSide(e, match);
+  for (const play of plays) {
+    const typeId = play.type?.id?.toString();
+    if (!typeId) continue;
+    const min  = espnPlayMin(play);
+    const name = espnPlayName(play);
+    const side = espnPlaySide(play, match);
 
-    // Goals
-    const h = e.HomeGoals || 0, a = e.AwayGoals || 0;
-    if (h > prevH || a > prevA) {
-      const isHome = (h > prevH);
-      goals.push({
-        min, name,
-        side: isHome ? 'home' : 'away',
-        own:  OWN_GOAL.has(typeId),
-        pen:  PENALTY_GOAL.has(typeId),
-        scoreH: h, scoreA: a,
-        idTeam: e.IdTeam,
-      });
-      prevH = h; prevA = a;
-    }
-
-    // Cards
-    if (YELLOW_CARD.has(typeId)) {
+    if (ESPN_GOAL.has(typeId)) {
+      goals.push({ min, name, side, own: false, pen: typeId === '99',
+        scoreH: play.homeScore ?? 0, scoreA: play.awayScore ?? 0 });
+    } else if (ESPN_OWN_GOAL.has(typeId)) {
+      // Own goal: credited to opposing side
+      goals.push({ min, name, side: side === 'home' ? 'away' : 'home',
+        own: true, pen: false,
+        scoreH: play.homeScore ?? 0, scoreA: play.awayScore ?? 0 });
+    } else if (ESPN_YELLOW.has(typeId)) {
       cards.push({ min, name, side, type: 'yellow' });
-    } else if (RED_CARD.has(typeId)) {
+    } else if (ESPN_RED.has(typeId)) {
       cards.push({ min, name, side, type: 'red' });
-    } else if (YELLOW_RED_CARD.has(typeId)) {
+    } else if (ESPN_YELLOW_RED.has(typeId)) {
       cards.push({ min, name, side, type: 'yellow-red' });
     }
   }
-
   return { goals, cards };
+}
+
+function extractESPNPossession(summary, match) {
+  for (const team of (summary.boxscore?.teams || [])) {
+    for (const stat of (team.statistics || [])) {
+      if (/possess/i.test(stat.name) || stat.abbreviation === 'POSS') {
+        const val = parseFloat(stat.displayValue);
+        if (!match.BallPossession) match.BallPossession = {};
+        if (team.homeAway === 'home') match.BallPossession.OverallHome = val;
+        else match.BallPossession.OverallAway = val;
+      }
+    }
+  }
 }
 
 function scheduleNextRefresh() {
   clearTimeout(refreshTimer);
   const hasLive = fifaMatches.some(m => STATUS_LIVE.has(m.MatchStatus));
   const delay = hasLive ? 30_000 : REFRESH_MS;
-  refreshTimer = setTimeout(() => fetchFromFIFA(false), delay);
+  refreshTimer = setTimeout(() => fetchFromESPN(false), delay);
   updateSyncDot(hasLive);
 }
 
@@ -511,7 +577,7 @@ function setSyncStatus(state) {
   if (!el) return;
   if (state === 'ok') {
     const d = new Date();
-    el.textContent = `FIFA · ${d.toLocaleTimeString('es',{hour:'2-digit',minute:'2-digit'})}`;
+    el.textContent = `ESPN · ${d.toLocaleTimeString('es',{hour:'2-digit',minute:'2-digit'})} CR`;
   } else {
     el.textContent = 'Sin conexión · caché';
   }
@@ -532,17 +598,28 @@ function getLocale(arr, locale='es') {
 function getMatchGroup(m) {
   const stage = getLocale(m.StageName);
   const group = getLocale(m.GroupName);
-  if (/primera fase|group stage/i.test(stage)) {
-    const letter = group.match(/Grupo\s+([A-L])/i)?.[1] || group.match(/Group\s+([A-L])/i)?.[1];
-    return letter ? letter.toUpperCase() : null;
+
+  // Extract group letter from API-provided name (e.g. "Group A", "Grupo A")
+  const letter = (group + ' ' + stage).match(/(?:Grupo|Group)\s+([A-L])\b/i)?.[1];
+  if (letter) return letter.toUpperCase();
+
+  // Fallback: derive group from both team ISO codes
+  const hIso = m.Home?.IdCountry;
+  const aIso = m.Away?.IdCountry;
+  if (hIso && aIso) {
+    for (const [grp, teams] of Object.entries(GROUPS)) {
+      if (teams.includes(hIso) && teams.includes(aIso)) return grp;
+    }
   }
-  if (/dieciséis|sixteen|dieciseis|round of 32/i.test(stage)) return 'Dieciseisavos';
-  if (/octav|round of 16/i.test(stage)) return 'Octavos';
-  if (/cuart|quarter/i.test(stage)) return 'Cuartos';
-  if (/semifin/i.test(stage)) return 'Semifinal';
-  if (/tercer|third/i.test(stage)) return 'Tercer puesto';
-  if (/final/i.test(stage)) return 'Final';
-  return stage;
+
+  // KO round detection
+  if (/round.of.32|dieciséis|dieciseis/i.test(stage + group)) return 'Dieciseisavos';
+  if (/round.of.16|octav/i.test(stage + group)) return 'Octavos';
+  if (/quarter|cuart/i.test(stage + group)) return 'Cuartos';
+  if (/semi/i.test(stage + group)) return 'Semifinal';
+  if (/third|tercer/i.test(stage + group)) return 'Tercer puesto';
+  if (/^final$/i.test(stage.trim()) || /^final$/i.test(group.trim())) return 'Final';
+  return null;
 }
 
 function matchStatus(m) {
@@ -1106,7 +1183,7 @@ function renderResumen() {
 function renderError(msg) {
   document.getElementById('mainContent').innerHTML = `
     <div class="error-box">⚠️ Error al cargar datos: ${msg}<br>
-    <button onclick="fetchFromFIFA(true)" style="margin-top:8px;padding:5px 12px;background:var(--accent);border:none;border-radius:5px;font-weight:700;cursor:pointer;color:#000">Reintentar</button></div>`;
+    <button onclick="fetchFromESPN(true)" style="margin-top:8px;padding:5px 12px;background:var(--accent);border:none;border-radius:5px;font-weight:700;cursor:pointer;color:#000">Reintentar</button></div>`;
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1142,14 +1219,14 @@ function renderCurrentTab() {
 }
 
 function clearCache() {
-  if (!confirm('¿Borrar la caché de datos? Se volverán a descargar de FIFA.')) return;
+  if (!confirm('¿Borrar la caché de datos? Se volverán a descargar.')) return;
   fifaMatches=[]; fifaScorers={}; fifaCards={}; lastSync=0;
   localStorage.removeItem('wc26_matches');
   localStorage.removeItem('wc26_scorers');
   localStorage.removeItem('wc26_cards');
   localStorage.removeItem('wc26_lastSync');
   document.getElementById('mainContent').innerHTML=`<div class="loading-overlay"><div class="spinner"></div><p style="color:var(--muted)">Recargando…</p></div>`;
-  fetchFromFIFA(true);
+  fetchFromESPN(true);
 }
 
 function toast(msg) {
@@ -1171,12 +1248,12 @@ const CACHE_TTL = 5 * 60 * 1000; // 5 minutos
     setSyncStatus('ok');
     const d = new Date(lastSync);
     document.getElementById('syncText').textContent =
-      `FIFA · ${d.toLocaleTimeString('es',{hour:'2-digit',minute:'2-digit'})}`;
+      `ESPN · ${d.toLocaleTimeString('es',{hour:'2-digit',minute:'2-digit'})} CR`;
     renderCurrentTab();
     // Refresh in background
-    setTimeout(() => fetchFromFIFA(false), 2000);
+    setTimeout(() => fetchFromESPN(false), 2000);
   } else {
-    await fetchFromFIFA(false);
+    await fetchFromESPN(false);
   }
 })();
 </script>
