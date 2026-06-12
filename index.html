@@ -419,13 +419,13 @@ function normalizeESPNMatch(event, idx) {
     HomeTeamScore: scored ? parseInt(home.score ?? '0') : null,
     AwayTeamScore: scored ? parseInt(away.score ?? '0') : null,
     Home: {
-      IdTeam:    home.id || '',
+      IdTeam:    home.team?.id || home.id || '',   // team.id for play matching
       IdCountry: toISO(home.team?.abbreviation),
       TeamName:  [{ Locale: 'es', Description: home.team?.displayName || '' }],
       Abbreviation: home.team?.abbreviation || '',
     },
     Away: {
-      IdTeam:    away.id || '',
+      IdTeam:    away.team?.id || away.id || '',
       IdCountry: toISO(away.team?.abbreviation),
       TeamName:  [{ Locale: 'es', Description: away.team?.displayName || '' }],
       Abbreviation: away.team?.abbreviation || '',
@@ -522,9 +522,30 @@ function espnPlayMin(play) {
 function extractESPNEvents(summary, match) {
   const goals = [];
   const cards = [];
-  // ESPN provides plays or keyPlays
-  const plays = summary.plays || summary.keyPlays || [];
 
+  // 1. Parse scoring array (primary source for goals in ESPN summary)
+  for (const period of (summary.scoring || [])) {
+    for (const score of (period.scores || [])) {
+      if (!score.scoringPlay) continue;
+      const teamId = score.team?.id?.toString();
+      const side   = teamId === match.Home?.IdTeam ? 'home' : 'away';
+      const min    = score.clock?.displayValue?.replace(/[^0-9+]/g,'') || '?';
+      const athlete = score.athletes?.find(a => a.type === 'scorer' || a.type === 'athlete');
+      const name   = athlete?.athlete?.displayName || '';
+      const isOwn  = /own.goal/i.test(score.scoreType?.displayName || '');
+      const isPen  = /penalty/i.test(score.scoreType?.displayName || '');
+      goals.push({
+        min, name,
+        side: isOwn ? (side === 'home' ? 'away' : 'home') : side,
+        own: isOwn, pen: isPen,
+        scoreH: parseInt(score.homeScore || '0'),
+        scoreA: parseInt(score.awayScore || '0'),
+      });
+    }
+  }
+
+  // 2. If scoring array empty, fall back to plays/keyPlays for goals + always use for cards
+  const plays = summary.plays || summary.keyPlays || [];
   for (const play of plays) {
     const typeId = play.type?.id?.toString();
     if (!typeId) continue;
@@ -532,22 +553,23 @@ function extractESPNEvents(summary, match) {
     const name = espnPlayName(play);
     const side = espnPlaySide(play, match);
 
-    if (ESPN_GOAL.has(typeId)) {
-      goals.push({ min, name, side, own: false, pen: typeId === '99',
-        scoreH: play.homeScore ?? 0, scoreA: play.awayScore ?? 0 });
-    } else if (ESPN_OWN_GOAL.has(typeId)) {
-      // Own goal: credited to opposing side
-      goals.push({ min, name, side: side === 'home' ? 'away' : 'home',
-        own: true, pen: false,
-        scoreH: play.homeScore ?? 0, scoreA: play.awayScore ?? 0 });
-    } else if (ESPN_YELLOW.has(typeId)) {
-      cards.push({ min, name, side, type: 'yellow' });
-    } else if (ESPN_RED.has(typeId)) {
-      cards.push({ min, name, side, type: 'red' });
-    } else if (ESPN_YELLOW_RED.has(typeId)) {
-      cards.push({ min, name, side, type: 'yellow-red' });
+    if (goals.length === 0) {
+      // Only add goals from plays if scoring array gave nothing
+      if (ESPN_GOAL.has(typeId)) {
+        goals.push({ min, name, side, own: false, pen: typeId === '99',
+          scoreH: play.homeScore ?? 0, scoreA: play.awayScore ?? 0 });
+      } else if (ESPN_OWN_GOAL.has(typeId)) {
+        goals.push({ min, name, side: side === 'home' ? 'away' : 'home',
+          own: true, pen: false,
+          scoreH: play.homeScore ?? 0, scoreA: play.awayScore ?? 0 });
+      }
     }
+
+    if (ESPN_YELLOW.has(typeId))     cards.push({ min, name, side, type: 'yellow' });
+    else if (ESPN_RED.has(typeId))   cards.push({ min, name, side, type: 'red' });
+    else if (ESPN_YELLOW_RED.has(typeId)) cards.push({ min, name, side, type: 'yellow-red' });
   }
+
   return { goals, cards };
 }
 
