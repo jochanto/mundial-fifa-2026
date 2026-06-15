@@ -1132,15 +1132,22 @@ async function debugFetchRawPlay() {
   const m = fifaMatches.find(x => STATUS_FINISHED.has(x.MatchStatus));
   if (!m) { el.textContent = 'No hay partidos finalizados'; return; }
   try {
-    const r = await fetch(`${ESPN_API}/playbyplay?event=${m.IdMatch}`);
+    const r = await fetch(`${ESPN_API}/summary?event=${m.IdMatch}`);
     const d = await r.json();
-    const plays = d.plays || [];
-    const goalPlay = plays.find(p => [97,98,99].includes(Number(p.type?.id))) || plays[0] || {};
+    // Show all top-level keys and their sizes to find where goals are
+    const overview = {};
+    for (const [k, v] of Object.entries(d)) {
+      if (Array.isArray(v)) overview[k] = `Array(${v.length})`;
+      else if (v && typeof v === 'object') overview[k] = `Object(${Object.keys(v).join(',')})`;
+      else overview[k] = v;
+    }
+    // Also dig into scoring if present
+    const scoring = d.scoring || [];
+    const firstScore = scoring[0]?.scores?.[0] || {};
     el.textContent = JSON.stringify({
       matchId: m.IdMatch,
-      homeIdTeam: m.Home?.IdTeam,
-      totalPlays: plays.length,
-      goalPlay,
+      topLevelKeys: overview,
+      firstScore,
     }, null, 2);
   } catch(e) { el.textContent = 'Error: ' + e.message; }
 }
