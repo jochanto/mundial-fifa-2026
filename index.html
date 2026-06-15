@@ -1117,28 +1117,44 @@ function renderEliminatoria() {
   }).join('');
 }
 
+async function debugFetchRawPlay() {
+  const el = document.getElementById('debug-raw');
+  if (!el) return;
+  el.textContent = 'Cargando…';
+  const m = fifaMatches.find(x => STATUS_FINISHED.has(x.MatchStatus));
+  if (!m) { el.textContent = 'No hay partidos finalizados'; return; }
+  try {
+    const r = await fetch(`${ESPN_API}/summary?event=${m.IdMatch}`);
+    const d = await r.json();
+    const plays = d.keyPlays || d.plays || [];
+    const firstPlay = plays[0] || {};
+    el.textContent = JSON.stringify({
+      matchId: m.IdMatch,
+      homeIdTeam: m.Home?.IdTeam,
+      keyPlaysCount: plays.length,
+      firstPlay,
+    }, null, 2);
+  } catch(e) { el.textContent = 'Error: ' + e.message; }
+}
+
 function renderGoleadores() {
   const list = buildScorers();
   if (!list.length) {
-    // Debug: show raw scorer data to diagnose extraction issues
-    const matchCount  = Object.keys(fifaScorers).length;
-    const totalGoals  = Object.values(fifaScorers).reduce((s,g)=>s+g.length,0);
-    const withName    = Object.values(fifaScorers).flat().filter(g=>g.name).length;
-    const sample      = Object.values(fifaScorers).flat().slice(0,3);
+    const matchCount    = Object.keys(fifaScorers).length;
+    const totalGoals    = Object.values(fifaScorers).reduce((s,g)=>s+g.length,0);
+    const withName      = Object.values(fifaScorers).flat().filter(g=>g.name).length;
     const finishedCount = fifaMatches.filter(m=>STATUS_FINISHED.has(m.MatchStatus)).length;
     return `
     <div style="text-align:center;padding:40px 20px;color:var(--muted)">
       <div style="font-size:3rem;margin-bottom:10px">⚽</div>
       <p>Sin goleadores registrados aún.</p>
-      <p style="font-size:.78rem;margin-top:5px">Los goles se cargan automáticamente cuando los partidos se juegan.</p>
     </div>
     <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px 14px;font-size:.72rem;color:var(--muted);margin-top:8px">
       <div style="font-weight:700;color:var(--accent);margin-bottom:6px">🔍 Debug ESPN</div>
-      <div>Partidos finalizados: <b style="color:var(--text)">${finishedCount}</b></div>
-      <div>Partidos con datos: <b style="color:var(--text)">${matchCount}</b></div>
-      <div>Goles almacenados: <b style="color:var(--text)">${totalGoals}</b></div>
-      <div>Con nombre: <b style="color:var(--text)">${withName}</b></div>
-      ${sample.length ? `<div style="margin-top:6px;font-size:.68rem">Muestra:<br><pre style="color:var(--text);font-size:.65rem;overflow:auto;max-height:120px">${JSON.stringify(sample, null, 2)}</pre></div>` : ''}
+      <div>Partidos finalizados: <b style="color:var(--text)">${finishedCount}</b> · Con datos: <b style="color:var(--text)">${matchCount}</b></div>
+      <div>Goles: <b style="color:var(--text)">${totalGoals}</b> · Con nombre: <b style="color:var(--text)">${withName}</b></div>
+      <button onclick="debugFetchRawPlay()" style="margin-top:8px;background:var(--accent);color:#000;border:none;padding:5px 12px;border-radius:5px;font-weight:700;cursor:pointer;font-size:.72rem">Cargar play crudo de ESPN</button>
+      <pre id="debug-raw" style="margin-top:8px;color:var(--text);font-size:.6rem;overflow:auto;max-height:300px;background:var(--card2);padding:8px;border-radius:5px;white-space:pre-wrap"></pre>
     </div>`;
   }
 
