@@ -494,13 +494,21 @@ async function fetchESPNDetails() {
     await Promise.allSettled(chunk.map(async m => {
       if (fifaScorers[m.IdMatch] && !STATUS_LIVE.has(m.MatchStatus)) return;
       try {
-        const r = await fetch(`${ESPN_API}/summary?event=${m.IdMatch}`);
-        if (!r.ok) return;
-        const d = await r.json();
-        const extracted = extractESPNEvents(d, m);
-        fifaScorers[m.IdMatch] = extracted.goals;
-        fifaCards[m.IdMatch]   = extracted.cards;
-        extractESPNPossession(d, m);
+        // playbyplay has goals/cards with player names; summary has possession stats
+        const [pbpRes, sumRes] = await Promise.allSettled([
+          fetch(`${ESPN_API}/playbyplay?event=${m.IdMatch}`),
+          fetch(`${ESPN_API}/summary?event=${m.IdMatch}`),
+        ]);
+        if (pbpRes.status === 'fulfilled' && pbpRes.value.ok) {
+          const d = await pbpRes.value.json();
+          const extracted = extractESPNEvents(d, m);
+          fifaScorers[m.IdMatch] = extracted.goals;
+          fifaCards[m.IdMatch]   = extracted.cards;
+        }
+        if (sumRes.status === 'fulfilled' && sumRes.value.ok) {
+          const d = await sumRes.value.json();
+          extractESPNPossession(d, m);
+        }
       } catch {}
     }));
   }
@@ -536,8 +544,8 @@ function extractESPNEvents(summary, match) {
   const goals = [];
   const cards = [];
 
-  // keyPlays is the primary source — has player names, team, type and running score
-  const plays = summary.keyPlays || summary.plays || [];
+  // plays array from /playbyplay endpoint (primary source)
+  const plays = summary.plays || summary.keyPlays || [];
 
   for (const play of plays) {
     const typeId = play.type?.id?.toString();
@@ -1124,15 +1132,15 @@ async function debugFetchRawPlay() {
   const m = fifaMatches.find(x => STATUS_FINISHED.has(x.MatchStatus));
   if (!m) { el.textContent = 'No hay partidos finalizados'; return; }
   try {
-    const r = await fetch(`${ESPN_API}/summary?event=${m.IdMatch}`);
+    const r = await fetch(`${ESPN_API}/playbyplay?event=${m.IdMatch}`);
     const d = await r.json();
-    const plays = d.keyPlays || d.plays || [];
-    const firstPlay = plays[0] || {};
+    const plays = d.plays || [];
+    const goalPlay = plays.find(p => [97,98,99].includes(Number(p.type?.id))) || plays[0] || {};
     el.textContent = JSON.stringify({
       matchId: m.IdMatch,
       homeIdTeam: m.Home?.IdTeam,
-      keyPlaysCount: plays.length,
-      firstPlay,
+      totalPlays: plays.length,
+      goalPlay,
     }, null, 2);
   } catch(e) { el.textContent = 'Error: ' + e.message; }
 }
