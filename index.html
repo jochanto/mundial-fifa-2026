@@ -536,65 +536,59 @@ function extractESPNEvents(summary, match) {
   const goals = [];
   const cards = [];
 
-  // 1. Parse scoring array (primary source for goals in ESPN summary)
-  for (const period of (summary.scoring || [])) {
-    for (const score of (period.scores || [])) {
-      if (!score.scoringPlay) continue;
-      const teamId = score.team?.id?.toString();
-      const side   = teamId === match.Home?.IdTeam ? 'home' : 'away';
-      const min    = score.clock?.displayValue?.replace(/[^0-9+]/g,'') ||
-                     (score.clock?.value ? String(Math.ceil(score.clock.value / 60)) : '?');
+  // keyPlays is the primary source — has player names, team, type and running score
+  const plays = summary.keyPlays || summary.plays || [];
 
-      // Try every known ESPN field for player name
-      const name =
-        score.athlete?.displayName ||
-        score.athletes?.find(a => a.type === 'scorer')?.athlete?.displayName ||
-        score.athletes?.find(a => a.type === 'athlete')?.athlete?.displayName ||
-        score.athletes?.[0]?.athlete?.displayName ||
-        score.players?.find(p => p.type === 'scorer')?.displayName ||
-        score.players?.[0]?.displayName ||
-        // last resort: extract first capitalized name from text
-        score.text?.match(/^([A-ZÁÉÍÓÚÜÑA-Za-z][a-záéíóúüñA-Z][\w\s\.\-\']{2,28}?)(?:\s*\(|\s*-|\s*scores|\s*gol)/i)?.[1]?.trim() ||
-        score.shortText?.match(/^(.+?)\s+(?:scores|gol|\d+\')/i)?.[1]?.trim() ||
-        '';
-
-      const scoreType = (score.scoreType?.displayName || score.scoringType?.displayName || '').toLowerCase();
-      const isOwn  = /own.goal|en.propia/i.test(scoreType);
-      const isPen  = /penalty|penal/i.test(scoreType);
-      goals.push({
-        min, name,
-        side: isOwn ? (side === 'home' ? 'away' : 'home') : side,
-        own: isOwn, pen: isPen,
-        scoreH: parseInt(score.homeScore || '0'),
-        scoreA: parseInt(score.awayScore || '0'),
-      });
-    }
-  }
-
-  // 2. If scoring array empty, fall back to plays/keyPlays for goals + always use for cards
-  const plays = summary.plays || summary.keyPlays || [];
   for (const play of plays) {
     const typeId = play.type?.id?.toString();
     if (!typeId) continue;
-    const min  = espnPlayMin(play);
-    const name = espnPlayName(play);
-    const side = espnPlaySide(play, match);
 
-    if (goals.length === 0) {
-      // Only add goals from plays if scoring array gave nothing
-      if (ESPN_GOAL.has(typeId)) {
-        goals.push({ min, name, side, own: false, pen: typeId === '99',
-          scoreH: play.homeScore ?? 0, scoreA: play.awayScore ?? 0 });
-      } else if (ESPN_OWN_GOAL.has(typeId)) {
-        goals.push({ min, name, side: side === 'home' ? 'away' : 'home',
-          own: true, pen: false,
-          scoreH: play.homeScore ?? 0, scoreA: play.awayScore ?? 0 });
+    const min = play.clock?.displayValue?.replace(/[^0-9+]/g, '') ||
+                (play.clock?.value ? String(Math.ceil(play.clock.value / 60)) : '?');
+
+    const name =
+      play.athletes?.find(a => a.type === 'scorer')?.athlete?.displayName ||
+      play.athletes?.find(a => a.type === 'athlete')?.athlete?.displayName ||
+      play.athletes?.[0]?.athlete?.displayName ||
+      play.athlete?.displayName ||
+      play.text?.match(/^(.+?)\s+(?:scores|gol|goal)/i)?.[1]?.trim() || '';
+
+    const teamId = play.team?.id?.toString();
+    const side   = teamId === match.Home?.IdTeam ? 'home' : 'away';
+
+    if (ESPN_GOAL.has(typeId)) {
+      goals.push({ min, name, side, own: false, pen: typeId === '99',
+        scoreH: parseInt(play.homeScore || '0'), scoreA: parseInt(play.awayScore || '0') });
+    } else if (ESPN_OWN_GOAL.has(typeId)) {
+      goals.push({ min, name, side: side === 'home' ? 'away' : 'home',
+        own: true, pen: false,
+        scoreH: parseInt(play.homeScore || '0'), scoreA: parseInt(play.awayScore || '0') });
+    } else if (ESPN_YELLOW.has(typeId))      cards.push({ min, name, side, type: 'yellow' });
+    else if (ESPN_RED.has(typeId))           cards.push({ min, name, side, type: 'red' });
+    else if (ESPN_YELLOW_RED.has(typeId))    cards.push({ min, name, side, type: 'yellow-red' });
+  }
+
+  // Fallback: scoring array (no player names but confirms goals happened)
+  if (goals.length === 0) {
+    for (const period of (summary.scoring || [])) {
+      for (const score of (period.scores || [])) {
+        if (!score.scoringPlay) continue;
+        const teamId = score.team?.id?.toString();
+        const side   = teamId === match.Home?.IdTeam ? 'home' : 'away';
+        const min    = score.clock?.displayValue?.replace(/[^0-9+]/g, '') ||
+                       (score.clock?.value ? String(Math.ceil(score.clock.value / 60)) : '?');
+        const name   =
+          score.athlete?.displayName ||
+          score.athletes?.find(a => a.type === 'scorer')?.athlete?.displayName ||
+          score.athletes?.[0]?.athlete?.displayName ||
+          score.text?.match(/^(.+?)\s+(?:scores|gol)/i)?.[1]?.trim() || '';
+        const st = (score.scoreType?.displayName || '').toLowerCase();
+        goals.push({ min, name,
+          side: /own/i.test(st) ? (side === 'home' ? 'away' : 'home') : side,
+          own: /own/i.test(st), pen: /penalty/i.test(st),
+          scoreH: parseInt(score.homeScore || '0'), scoreA: parseInt(score.awayScore || '0') });
       }
     }
-
-    if (ESPN_YELLOW.has(typeId))     cards.push({ min, name, side, type: 'yellow' });
-    else if (ESPN_RED.has(typeId))   cards.push({ min, name, side, type: 'red' });
-    else if (ESPN_YELLOW_RED.has(typeId)) cards.push({ min, name, side, type: 'yellow-red' });
   }
 
   return { goals, cards };
@@ -1129,7 +1123,7 @@ function renderGoleadores() {
     <div style="text-align:center;padding:60px 20px;color:var(--muted)">
       <div style="font-size:3rem;margin-bottom:10px">⚽</div>
       <p>Sin goleadores registrados aún.</p>
-      <p style="font-size:.78rem;margin-top:5px">Los goles se cargan automáticamente desde FIFA cuando los partidos se juegan.</p>
+      <p style="font-size:.78rem;margin-top:5px">Los goles se cargan automáticamente cuando los partidos se juegan.</p>
     </div>`;
 
   const medal = i=>i===0?'🥇':i===1?'🥈':i===2?'🥉':'';
