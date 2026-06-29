@@ -394,12 +394,12 @@ function getMatchGroup(m) {
     const letter = group.match(/Grupo\s+([A-L])/i)?.[1] || group.match(/Group\s+([A-L])/i)?.[1];
     return letter ? letter.toUpperCase() : null;
   }
-  if (/dieciséis|sixteen|dieciseis|round of 32/i.test(stage)) return 'Dieciseisavos';
-  if (/octav|round of 16/i.test(stage)) return 'Octavos';
-  if (/cuart|quarter/i.test(stage)) return 'Cuartos';
-  if (/semifin/i.test(stage)) return 'Semifinal';
-  if (/tercer|third/i.test(stage)) return 'Tercer puesto';
-  if (/final/i.test(stage)) return 'Final';
+  if (/dieciseis/i.test(stage)) return 'Dieciseisavos';
+  if (/octavo/i.test(stage)) return 'Octavos';
+  if (/cuarto/i.test(stage)) return 'Cuartos';
+  if (/semifinal/i.test(stage)) return 'Semifinal';
+  if (/tercer/i.test(stage)) return 'Tercer puesto';
+  if (/^final$/i.test(stage)) return 'Final';
   return stage;
 }
 
@@ -487,8 +487,8 @@ function renderMatchCard(m) {
   const status = matchStatus(m);
   const hScore = m.HomeTeamScore;
   const aScore = m.AwayTeamScore;
-  const hName  = teamName(m.Home);
-  const aName  = teamName(m.Away);
+  const hName  = m.Home ? teamName(m.Home) : (m.PlaceHolderA||'Por definir');
+  const aName  = m.Away ? teamName(m.Away) : (m.PlaceHolderB||'Por definir');
   const hIso   = m.Home?.IdCountry || '';
   const aIso   = m.Away?.IdCountry || '';
   const goals  = fifaScorers[m.IdMatch] || [];
