@@ -504,8 +504,8 @@ function renderMatchCard(m) {
   const homeGoals = goals.filter(g=>g.side==='home');
   const awayGoals = goals.filter(g=>g.side==='away');
   const poss  = m.BallPossession;
-  const date  = formatDate(m.LocalDate || m.Date);
-  const time  = formatTime(m.LocalDate || m.Date);
+  const date  = formatDate(m.Date);
+  const time  = formatTime(m.Date);
   const matchTime = m.MatchTime ? `${m.MatchTime}'` : '';
 
   // Score display
