@@ -259,7 +259,10 @@ const GROUPS = {
 // STATE
 // ═══════════════════════════════════════════════════════
 let fifaMatches  = JSON.parse(localStorage.getItem('wc26_matches') || '[]');
-let fifaScorers  = JSON.parse(localStorage.getItem('wc26_scorers') || '{}'); // idMatch → events
+const SCORERS_VERSION = 2; // bump to invalidate cached scorers
+let fifaScorers  = parseInt(localStorage.getItem('wc26_scorers_v')||'0') === SCORERS_VERSION
+  ? JSON.parse(localStorage.getItem('wc26_scorers') || '{}')
+  : {};
 let lastSync     = parseInt(localStorage.getItem('wc26_lastSync') || '0');
 let currentTab   = 'resumen';
 let openPanels   = new Set();
@@ -268,6 +271,7 @@ let refreshTimer = null;
 function saveState() {
   localStorage.setItem('wc26_matches',  JSON.stringify(fifaMatches));
   localStorage.setItem('wc26_scorers',  JSON.stringify(fifaScorers));
+  localStorage.setItem('wc26_scorers_v', String(SCORERS_VERSION));
   localStorage.setItem('wc26_lastSync', String(Date.now()));
   lastSync = Date.now();
 }
@@ -334,13 +338,18 @@ function extractGoals(events, match) {
     if (h > prevH || a > prevA) {
       const isHome = (h > prevH);
       const typeId = e.Type;
-      const own = OWN_GOAL.has(typeId);
+      let own = OWN_GOAL.has(typeId);
       const pen = PENALTY_GOAL.has(typeId);
-      // Extract player name from EventDescription
       let name = '';
       for (const ed of (e.EventDescription || [])) {
-        const m2 = ed.Description?.match(/^¡?([A-ZÁÉÍÓÚÜÑ\s\.]+)\s*\(/);
+        const desc = ed.Description || '';
+        if (/propia meta|own goal/i.test(desc)) own = true;
+        const m2 = desc.match(/Goool de (.+?)\s*\(/)
+          || desc.match(/convierte el penal.*?([A-ZÁÉÍÓÚÜÑa-záéíóúüñ\s\.'-]+)\s*\(/)
+          || desc.match(/¡(.+?)\s*\([^)]+\)\s*anota/);
         if (m2) { name = m2[1].trim(); break; }
+        const m3 = desc.match(/¡(.+?)\s*\([^)]+\)/);
+        if (m3 && !name) { name = m3[1].trim(); }
       }
       goals.push({
         min: e.MatchMinute || '?',
